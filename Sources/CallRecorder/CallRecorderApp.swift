@@ -13,5 +13,7 @@ struct CallRecorderApp: App {
         .menuBarExtraStyle(.window)
 
         HistoryWindow(model: model)
+
+        TranscriptWindow(model: model)
     }
 }

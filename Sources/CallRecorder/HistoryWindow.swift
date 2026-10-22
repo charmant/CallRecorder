@@ -82,12 +82,10 @@ private struct HistoryView: View {
         .onAppear {
             model.reloadHistory()
             if PreviewHarness.opensHistory, selection == nil { selection = model.recordings.first?.id }
-            // While the window is open, the app shows in the Dock and ⌘-Tab, like a regular window.
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate()
+            WindowActivation.opened()
         }
         .onDisappear {
-            NSApp.setActivationPolicy(.accessory)
+            WindowActivation.closed()
         }
     }
 
@@ -238,6 +236,7 @@ private struct TranscriptSection: View {
     let recording: Recording
     let model: AppModel
     @State private var transcript: Transcript?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Section("Transcript") {
@@ -262,7 +261,9 @@ private struct TranscriptSection: View {
                     .buttonStyle(.plain)
                     .disabled(!recording.canPlay)
                 }
-                Button("Open transcript.md", systemImage: "doc.text") { model.openTranscript(recording) }
+                Button("Open in Window", systemImage: "macwindow") {
+                    openWindow(id: TranscriptWindow.id, value: recording.folder)
+                }
             } else if model.isTranscribing(recording) {
                 let status = model.transcription?.folder == recording.folder ? model.transcription : nil
                 ProgressView(value: status?.progress ?? 0) {

@@ -25,6 +25,8 @@ tracks are separate, the transcript knows exactly who said what.
 - Live levels for you and them, and a warning if the other side goes silent for too long.
 - History: recent recordings right in the menu, plus a History window with search and filters.
 - Player with a conversation waveform — them on top, you below. Click anywhere on it to jump there.
+- Transcripts open in the app's own window: the conversation waveform on top, every line with its time and
+  speaker, click a time to play from there, the current line follows playback, search and copy.
 - In the History window, click a transcript line to play from that moment; search covers transcripts.
 - Liquid Glass UI built from native macOS 26 components.
 - Everything stays local: no servers, no analytics.

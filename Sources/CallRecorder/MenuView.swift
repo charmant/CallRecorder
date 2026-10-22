@@ -26,6 +26,9 @@ struct MenuBarLabel: View {
         }
         .onAppear {
             if PreviewHarness.opensHistory { openWindow(id: HistoryWindow.id) }
+            if PreviewHarness.opensTranscript, let first = model.recordings.first {
+                openWindow(id: TranscriptWindow.id, value: first.folder)
+            }
         }
     }
 }
@@ -477,6 +480,7 @@ struct RecordingRow: View {
     let recording: Recording
     let model: AppModel
     let style: Style
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -524,11 +528,13 @@ struct RecordingRow: View {
                     .controlSize(.mini)
                     .help("Transcribing…")
             } else if recording.hasTranscript {
-                Button("Open Transcript", systemImage: "text.bubble") { model.openTranscript(recording) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .help("Open transcript.md")
+                Button("Open Transcript", systemImage: "text.bubble") {
+                    openWindow(id: TranscriptWindow.id, value: recording.folder)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Open the transcript")
             }
             Button(playback.isPlaying(recording) ? "Pause" : "Play",
                    systemImage: playback.isPlaying(recording) ? "pause.circle.fill" : "play.circle.fill") {
@@ -575,6 +581,7 @@ private struct PlaybackControls: View {
 struct RecordingActions: View {
     let recording: Recording
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Button(model.playback.isPlaying(recording) ? "Pause" : "Play", systemImage: "play") {
@@ -585,7 +592,9 @@ struct RecordingActions: View {
             Button("Stop", systemImage: "stop") { model.playback.stop() }
         }
         if recording.hasTranscript {
-            Button("Open Transcript", systemImage: "text.bubble") { model.openTranscript(recording) }
+            Button("Open Transcript", systemImage: "text.bubble") {
+                openWindow(id: TranscriptWindow.id, value: recording.folder)
+            }
         }
         if model.isTranscribing(recording) {
             Button("Stop Transcription", systemImage: "xmark.circle") { model.stopTranscription(recording.folder) }

@@ -194,9 +194,6 @@ final class AppModel {
         if transcription?.folder == folder { transcriptionJob?.cancel() }
     }
 
-    func openTranscript(_ recording: Recording) {
-        NSWorkspace.shared.open(Transcript.markdownURL(in: recording.folder))
-    }
 
     private func enqueueTranscription(_ folder: URL) {
         guard transcription?.folder != folder, !transcriptionQueue.contains(folder) else { return }
