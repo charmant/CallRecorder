@@ -148,19 +148,19 @@ actor Transcriber {
         try markdown(transcript, folder: folder).write(to: Transcript.markdownURL(in: folder), atomically: true, encoding: .utf8)
     }
 
-    /// transcript.md: a header, then one line per utterance — "[05:12–05:14] Them: text".
+    /// transcript.md: a header, then one line per utterance — "[05:12–05:14] Them: text" — with no blank
+    /// lines in between. Two trailing spaces are a Markdown line break, so rendered views keep one line per
+    /// utterance too instead of merging them into a paragraph.
     private static func markdown(_ transcript: Transcript, folder: URL) -> String {
-        var lines = ["# Transcript", ""]
+        var header = ["Transcribed on device with \(transcript.model)", "You = your microphone, Them = the other side"]
         if let session = SessionHeader.load(from: folder) {
-            lines.append("\(session.source) · \(RecordingDates.full(session.startedAt))")
+            header.insert("\(session.source) · \(RecordingDates.full(session.startedAt))", at: 0)
         }
-        lines.append("Transcribed on device with \(transcript.model). You: your microphone; Them: the other side.")
-        lines.append("")
-        for segment in transcript.segments {
-            lines.append("[\(formatDuration(segment.start))–\(formatDuration(segment.end))] \(segment.speaker.title): \(segment.text)")
-            lines.append("")
+        var lines = ["# Transcript", "", header.joined(separator: " · "), ""]
+        lines += transcript.segments.map {
+            "[\(formatDuration($0.start))–\(formatDuration($0.end))] \($0.speaker.title): \($0.text)  "
         }
-        return lines.joined(separator: "\n")
+        return lines.joined(separator: "\n") + "\n"
     }
 
     private struct SessionHeader: Decodable {
