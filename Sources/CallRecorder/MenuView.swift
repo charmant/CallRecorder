@@ -6,6 +6,7 @@ import SwiftUI
 struct MenuBarLabel: View {
     let model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Group {
@@ -29,6 +30,7 @@ struct MenuBarLabel: View {
             if PreviewHarness.opensTranscript, let first = model.recordings.first {
                 openWindow(id: TranscriptWindow.id, value: first.folder)
             }
+            if PreviewHarness.opensSettings { openSettings() }
         }
     }
 }
@@ -36,6 +38,7 @@ struct MenuBarLabel: View {
 struct MenuView: View {
     let model: AppModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -48,21 +51,19 @@ struct MenuView: View {
                 if let transcription = model.transcription {
                     TranscriptionRow(status: transcription) { model.stopTranscription(transcription.folder) }
                 }
-                SetupCard(model: model)
+                if model.permissionsDenied { PermissionCallout(model: model) }
                 RecentSection(model: model)
             case .recording, .finishing:
                 LevelsCard(model: model)
                     .opacity(model.phase == .finishing ? 0.4 : 1)
                 RecordingNotes(model: model)
             }
-            DiagnosticsSection(model: model)
-            PanelFooter(model: model, openHistory: openHistory)
+            PanelFooter(model: model, openHistory: openHistory, openSettings: showSettings)
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: 300)
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .smooth(duration: 0.35), value: model.phase)
         .onAppear {
-            model.refreshMicrophones()
             model.refreshPermissions()
             model.reloadHistory()
         }
@@ -70,6 +71,11 @@ struct MenuView: View {
 
     private func openHistory() {
         openWindow(id: HistoryWindow.id)
+        NSApp.activate()
+    }
+
+    private func showSettings() {
+        openSettings()
         NSApp.activate()
     }
 }
@@ -323,46 +329,34 @@ private struct StatusCard: View {
     }
 }
 
-private struct SetupCard: View {
-    @Bindable var model: AppModel
+/// Shown only when a permission was denied — otherwise permissions live in Settings.
+private struct PermissionCallout: View {
+    let model: AppModel
 
     var body: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("Microphone", selection: $model.selectedMicUID) {
-                    Text("System Default (\(model.defaultMicName))").tag("")
-                    ForEach(model.microphones) { microphone in
-                        Text(microphone.name).tag(microphone.uid)
-                    }
+            HStack(spacing: 8) {
+                Label {
+                    Text(text).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "hand.raised.fill").foregroundStyle(.red)
                 }
-                LabeledContent("Microphone access") {
-                    PermissionValue(state: model.micPermission, openSettings: model.openPrivacySettings)
-                }
-                LabeledContent("System audio") {
-                    PermissionValue(state: model.systemAudioPermission, openSettings: model.openPrivacySettings)
-                }
+                Spacer(minLength: 4)
+                Button("Settings…", action: model.openPrivacySettings)
+                    .help("Open Privacy & Security in System Settings")
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
             }
             .font(.callout)
-            .padding(4)
+            .padding(2)
         }
     }
-}
 
-private struct PermissionValue: View {
-    let state: PermissionState
-    let openSettings: () -> Void
-
-    var body: some View {
-        switch state {
-        case .granted:
-            Label("Granted", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        case .unknown:
-            Label("Asked on first recording", systemImage: "questionmark.circle").foregroundStyle(.secondary)
-        case .denied:
-            Button("Settings…", systemImage: "hand.raised.fill", action: openSettings)
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .tint(.red)
+    private var text: String {
+        switch (model.micPermission == .denied, model.systemAudioPermission == .denied) {
+        case (true, true): "No microphone or system audio access"
+        case (true, false): "No microphone access"
+        default: "No system audio access"
         }
     }
 }
@@ -376,8 +370,9 @@ private struct TranscriptionRow: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label(status.downloadingModel ? "Downloading the speech model (one time, ~610 MB)…" : "Transcribing on this Mac…",
+                    Label(status.downloadingModel ? "Downloading speech model (~610 MB)…" : "Transcribing on this Mac…",
                           systemImage: status.downloadingModel ? "arrow.down.circle" : "text.bubble")
+                        .lineLimit(1)
                     Spacer()
                     Button("Stop Transcription", systemImage: "xmark.circle.fill", action: stop)
                         .labelStyle(.iconOnly)
@@ -418,36 +413,10 @@ private struct RecentSection: View {
 
 // MARK: - Panel footer
 
-private struct DiagnosticsSection: View {
-    let model: AppModel
-
-    var body: some View {
-        DisclosureGroup("Diagnostics · active audio processes: \(model.activeProcesses.count)") {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(model.activeProcesses) { process in
-                    HStack(spacing: 6) {
-                        Image(systemName: "mic.fill").opacity(process.isRunningInput ? 1 : 0.15)
-                        Image(systemName: "speaker.wave.2.fill").opacity(process.isRunningOutput ? 1 : 0.15)
-                        Text("\(process.executable) · \(process.pid)").lineLimit(1).truncationMode(.middle)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(process.executable), \(process.isRunningInput ? "microphone" : "") \(process.isRunningOutput ? "audio" : "")")
-                }
-                Button("Open Log") { model.openDiagnosticsLog() }
-                    .controlSize(.small)
-                    .padding(.top, 2)
-            }
-            .font(.caption.monospaced())
-            .padding(.top, 4)
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-}
-
 private struct PanelFooter: View {
     let model: AppModel
     let openHistory: () -> Void
+    let openSettings: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -458,6 +427,10 @@ private struct PanelFooter: View {
                     Button("Recordings Folder", systemImage: "folder", action: model.openRecordingsFolder)
                         .labelStyle(.iconOnly)
                         .help("Recordings Folder")
+                    Button("Settings…", systemImage: "gearshape", action: openSettings)
+                        .labelStyle(.iconOnly)
+                        .help("Settings: microphone, permissions, diagnostics")
+                        .keyboardShortcut(",")
                 }
             }
             Spacer()

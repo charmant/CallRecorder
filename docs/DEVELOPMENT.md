@@ -9,7 +9,7 @@
 | `AudioProcesses.swift`, `ProcessMonitor.swift` | Core Audio process list, call detection, diagnostics log |
 | `Permissions.swift` | microphone (AVFoundation) and system audio (private TCC) |
 | `AppModel.swift` | app state: recording, auto-stop, history, preview states for screenshots |
-| `MenuView.swift`, `HistoryWindow.swift`, `TranscriptWindow.swift` | menu bar panel, History window, transcript window |
+| `MenuView.swift`, `HistoryWindow.swift`, `TranscriptWindow.swift`, `SettingsView.swift` | menu bar panel, History window, transcript window, Settings |
 | `Playback.swift`, `ConversationTimeline.swift`, `Waveform.swift` | player and conversation waveform |
 | `Mixdown.swift`, `History.swift` | mixing to m4a, loading history from `~/Calls` |
 | `Transcriber.swift` | on-device transcription (FluidAudio + Parakeet Ultra), utterance splitting, transcript.md/json |
@@ -46,7 +46,7 @@ open ~/Applications/CallRecorder.app --args --preview recording --preview-out /t
 ```
 
 States: `idle`, `call`, `recording`, `recording-ending`, `finishing`, `saved`, `problems`, `denied`,
-`playing`, `transcribing`, `empty`, `history`, `history-playing`, `history-empty`, `transcript` (made-up lines).
+`playing`, `transcribing`, `empty`, `history`, `history-playing`, `history-empty`, `transcript` (made-up lines), `settings`.
 
 ## Capture pipeline
 

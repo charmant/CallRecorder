@@ -16,13 +16,15 @@ enum PreviewHarness {
     static var opensHistory: Bool { state?.hasPrefix("history") == true }
     /// `transcript` opens the transcript window with made-up lines.
     static var opensTranscript: Bool { state == "transcript" }
+    /// `settings` opens the Settings window.
+    static var opensSettings: Bool { state == "settings" }
 
     @MainActor private static var panel: NSPanel?
 
     @MainActor
     static func show(model: AppModel, log: DiagnosticLog) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            if !opensHistory, !opensTranscript { showPanel(model: model) }
+            if !opensHistory, !opensTranscript, !opensSettings { showPanel(model: model) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 let windows = NSApp.windows.filter { $0.isVisible && !$0.className.contains("StatusBar") }
                 log.write("preview \(state ?? "?"): windows "

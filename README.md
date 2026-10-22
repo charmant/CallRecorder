@@ -78,6 +78,8 @@ On the first recording macOS asks for two permissions: **Microphone** (your trac
    call on an M1 Pro). The ✕ next to the progress bar stops it; **Transcribe** in a recording's menu starts it again.
 5. **History…** (⌘Y) lists all recordings by day, with the transcript of the selected one.
 
+The microphone choice, permissions and diagnostics are in **Settings** (the gear in the panel, or ⌘,).
+
 ## What gets saved
 
 Each recording is a folder `~/Calls/<date time> <FaceTime|Telegram>/`:

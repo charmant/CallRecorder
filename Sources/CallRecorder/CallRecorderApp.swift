@@ -15,5 +15,7 @@ struct CallRecorderApp: App {
         HistoryWindow(model: model)
 
         TranscriptWindow(model: model)
+
+        SettingsScene(model: model)
     }
 }
