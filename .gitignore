@@ -4,3 +4,14 @@ build/
 .DS_Store
 dist/
 bench/
+
+# Recordings and transcripts are private and never belong in the repository
+Calls/
+*.caf
+*.m4a
+*.wav
+transcript*.md
+transcript*.json
+session.json
+waveform.json
+events.log
