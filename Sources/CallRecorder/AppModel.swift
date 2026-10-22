@@ -1,11 +1,19 @@
 import AppKit
 import CoreAudio
+import FluidAudio
 import Observation
 
 struct MicrophoneOption: Identifiable, Hashable {
     let uid: String
     let name: String
     var id: String { uid }
+}
+
+/// Progress of the recording being transcribed.
+struct TranscriptionStatus: Equatable {
+    let folder: URL
+    var downloadingModel = false
+    var progress: Double = 0
 }
 
 /// Message in the panel: save result or error.
@@ -50,6 +58,8 @@ final class AppModel {
     private(set) var defaultMicName = "—"
     private(set) var activeProcesses: [AudioProcessInfo] = []
     private(set) var recordings: [Recording] = []
+    /// The transcription in progress, if any — shown in the panel and next to the recording.
+    private(set) var transcription: TranscriptionStatus?
     let playback = Playback()
 
     /// Empty string means the system default microphone.
@@ -64,6 +74,9 @@ final class AppModel {
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var sawCallDuringRecording = false
     @ObservationIgnored private var callEndedAt: Date?
+    @ObservationIgnored private var transcriptionQueue: [URL] = []
+    @ObservationIgnored private var transcriptionRunning = false
+    @ObservationIgnored private var transcriptionJob: Task<Transcript, Error>?
 
     /// How many seconds the call app must stay off the microphone before recording stops.
     private let autoStopDelay: TimeInterval = 3
@@ -91,6 +104,7 @@ final class AppModel {
             PreviewHarness.show(model: self, log: diagnostics)
         } else {
             runSelfTestIfRequested()
+            runTranscriptionCommandIfRequested()
         }
     }
 
@@ -159,6 +173,90 @@ final class AppModel {
             : StatusMessage(kind: .warning, title: "Saved · \(duration), with issues", details: result.problems)
         diagnostics.write("  \(status?.title ?? "") \(result.problems.joined(separator: "; "))")
         reloadHistory()
+        if session.source != .systemWide, result.duration > 1 {
+            enqueueTranscription(session.folder)
+        }
+    }
+
+    // MARK: - Transcription
+
+    func isTranscribing(_ recording: Recording) -> Bool {
+        transcription?.folder == recording.folder || transcriptionQueue.contains(recording.folder)
+    }
+
+    func transcribe(_ recording: Recording) {
+        enqueueTranscription(recording.folder)
+    }
+
+    /// Stops the transcription in progress (nothing is saved) or takes a waiting recording out of the queue.
+    func stopTranscription(_ folder: URL) {
+        transcriptionQueue.removeAll { $0 == folder }
+        if transcription?.folder == folder { transcriptionJob?.cancel() }
+    }
+
+    func openTranscript(_ recording: Recording) {
+        NSWorkspace.shared.open(Transcript.markdownURL(in: recording.folder))
+    }
+
+    private func enqueueTranscription(_ folder: URL) {
+        guard transcription?.folder != folder, !transcriptionQueue.contains(folder) else { return }
+        transcriptionQueue.append(folder)
+        guard !transcriptionRunning else { return }
+        transcriptionRunning = true
+        Task { await runTranscriptionQueue() }
+    }
+
+    /// One recording at a time and never during a call; the model is unloaded once the queue is empty.
+    private func runTranscriptionQueue() async {
+        while true {
+            while !transcriptionQueue.isEmpty {
+                while phase != .idle { try? await Task.sleep(for: .seconds(2)) }
+                let folder = transcriptionQueue.removeFirst()
+                transcription = TranscriptionStatus(folder: folder)
+                // One retry for failures that aren't a user stop: once, right after a run stopped mid-way,
+                // the next model load failed spuriously and a reload fixed it.
+                for attempt in 1...2 {
+                    let job = Task {
+                        try await Transcriber.shared.transcribe(folder: folder) { [weak self] progress in
+                            Task { @MainActor in self?.updateTranscription(folder, progress) }
+                        }
+                    }
+                    transcriptionJob = job
+                    do {
+                        let transcript = try await job.value
+                        diagnostics.write("transcript: \(transcript.segments.count) segments in \(Int(transcript.processingSeconds)) s → \(folder.lastPathComponent)")
+                        break
+                    } catch is CancellationError where job.isCancelled {
+                        diagnostics.write("transcription stopped: \(folder.lastPathComponent)")
+                        break
+                    } catch {
+                        diagnostics.write("✗ transcription failed (attempt \(attempt)): \(String(describing: error))")
+                        await Transcriber.shared.unload()
+                        if attempt == 2 {
+                            status = StatusMessage(kind: .error, title: "Couldn't transcribe the recording", details: [error.localizedDescription])
+                        }
+                    }
+                }
+                transcriptionJob = nil
+                transcription = nil
+                reloadHistory()
+            }
+            await Transcriber.shared.unload()
+            if transcriptionQueue.isEmpty { break }
+        }
+        transcriptionRunning = false
+    }
+
+    private func updateTranscription(_ folder: URL, _ progress: Transcriber.Progress) {
+        guard transcription?.folder == folder else { return }
+        switch progress {
+        case .downloadingModel(let value):
+            transcription?.downloadingModel = true
+            transcription?.progress = value
+        case .transcribing(let value):
+            transcription?.downloadingModel = false
+            transcription?.progress = value
+        }
     }
 
     // MARK: - History
@@ -342,6 +440,10 @@ final class AppModel {
             playback.showPreview(recordings[0], progress: 0.35)
         }
         switch state {
+        case "transcribing":
+            recordings[1].hasTranscript = true
+            recordings[2].hasTranscript = true
+            transcription = TranscriptionStatus(folder: recordings[0].folder, progress: 0.42)
         case "call":
             activeCall = .faceTime
         case "recording", "recording-ending":
@@ -373,6 +475,65 @@ final class AppModel {
             recordings = []
         default:
             break
+        }
+    }
+
+    /// Command-line hooks for testing transcription without the UI, then quit:
+    /// `--transcribe <recording folder>` and `--transcribe-clips <folder of .wav> <out.json>`.
+    private func runTranscriptionCommandIfRequested() {
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--model"), arguments.indices.contains(index + 1) {
+            Transcriber.modelVersion = arguments[index + 1] == "ultra" ? .ultra : .v3
+        }
+        if let index = arguments.firstIndex(of: "--encoder"), arguments.indices.contains(index + 1),
+           let precision = ParakeetEncoderPrecision(rawValue: arguments[index + 1]) {
+            Transcriber.encoderPrecision = precision
+        }
+        if let index = arguments.firstIndex(of: "--enqueue-transcription"), arguments.indices.contains(index + 1) {
+            // Same path as after a call: through the queue, with progress and unloading the model at the end.
+            let folder = URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
+            enqueueTranscription(folder)
+            if let stopIndex = arguments.firstIndex(of: "--stop-after"), arguments.indices.contains(stopIndex + 1),
+               let seconds = Double(arguments[stopIndex + 1]) {
+                Task {
+                    try? await Task.sleep(for: .seconds(seconds))
+                    stopTranscription(folder)
+                }
+            }
+            Task {
+                while transcriptionRunning { try? await Task.sleep(for: .milliseconds(200)) }
+                diagnostics.write("queue finished; last status: \(status?.title ?? "none")")
+                NSApp.terminate(nil)
+            }
+        } else if let index = arguments.firstIndex(of: "--transcribe"), arguments.indices.contains(index + 1) {
+            let folder = URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
+            Task {
+                do {
+                    let transcript = try await Transcriber.shared.transcribe(folder: folder) { _ in }
+                    diagnostics.write("transcribe: \(transcript.segments.count) segments in \(Int(transcript.processingSeconds)) s → \(folder.path)")
+                } catch {
+                    diagnostics.write("transcribe failed: \(error.localizedDescription)")
+                }
+                NSApp.terminate(nil)
+            }
+        } else if let index = arguments.firstIndex(of: "--transcribe-clips"), arguments.indices.contains(index + 2) {
+            let folder = URL(filePath: arguments[index + 1], directoryHint: .isDirectory)
+            let output = URL(filePath: arguments[index + 2])
+            Task {
+                do {
+                    let clips = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+                        .filter { $0.pathExtension == "wav" }
+                        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+                    let started = Date()
+                    let texts = try await Transcriber.shared.transcribeClips(clips)
+                    let data = try JSONSerialization.data(withJSONObject: ["texts": texts, "seconds": Date().timeIntervalSince(started)],
+                                                          options: [.prettyPrinted, .sortedKeys])
+                    try data.write(to: output)
+                } catch {
+                    diagnostics.write("transcribe-clips failed: \(error.localizedDescription)")
+                }
+                NSApp.terminate(nil)
+            }
         }
     }
 

@@ -9,6 +9,7 @@ struct Recording: Identifiable, Hashable {
     let duration: TimeInterval
     let problems: [String]
     let canPlay: Bool
+    var hasTranscript = false
 
     var id: URL { folder }
     var conversationURL: URL { folder.appending(path: "conversation.m4a") }
@@ -24,10 +25,11 @@ struct Recording: Identifiable, Hashable {
         }
     }
 
-    func matches(_ query: String) -> Bool {
+    /// `transcript` is the recording's transcript text, when it has been loaded for search.
+    func matches(_ query: String, transcript: String? = nil) -> Bool {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return true }
-        let text = [source, dayTimeText, RecordingDates.dayTitle(startedAt)] + problems
+        let text = [source, dayTimeText, RecordingDates.dayTitle(startedAt), transcript ?? ""] + problems
         return text.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }
@@ -55,7 +57,8 @@ enum RecordingHistory {
             }
             let canPlay = FileManager.default.fileExists(atPath: folder.appending(path: "conversation.m4a").path)
             return Recording(folder: folder, source: session.source, startedAt: session.startedAt,
-                             duration: duration, problems: problems, canPlay: canPlay)
+                             duration: duration, problems: problems, canPlay: canPlay,
+                             hasTranscript: FileManager.default.fileExists(atPath: Transcript.url(in: folder).path))
         }
         .sorted { $0.startedAt > $1.startedAt }
     }

@@ -42,6 +42,9 @@ struct MenuView: View {
             switch model.phase {
             case .idle:
                 if let status = model.status { StatusCard(status: status) }
+                if let transcription = model.transcription {
+                    TranscriptionRow(status: transcription) { model.stopTranscription(transcription.folder) }
+                }
                 SetupCard(model: model)
                 RecentSection(model: model)
             case .recording, .finishing:
@@ -361,6 +364,32 @@ private struct PermissionValue: View {
     }
 }
 
+/// Background transcription of the last recording (or the one-time model download).
+private struct TranscriptionRow: View {
+    let status: TranscriptionStatus
+    let stop: () -> Void
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label(status.downloadingModel ? "Downloading the speech model (one time, ~610 MB)…" : "Transcribing on this Mac…",
+                          systemImage: status.downloadingModel ? "arrow.down.circle" : "text.bubble")
+                    Spacer()
+                    Button("Stop Transcription", systemImage: "xmark.circle.fill", action: stop)
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Stop transcription — you can start it again from the recording's menu")
+                }
+                ProgressView(value: status.progress)
+            }
+            .font(.callout)
+            .padding(4)
+        }
+    }
+}
+
 private struct RecentSection: View {
     let model: AppModel
 
@@ -490,6 +519,17 @@ struct RecordingRow: View {
                     .help(recording.problems.joined(separator: "\n"))
                     .accessibilityLabel("Has issues")
             }
+            if model.isTranscribing(recording) {
+                ProgressView()
+                    .controlSize(.mini)
+                    .help("Transcribing…")
+            } else if recording.hasTranscript {
+                Button("Open Transcript", systemImage: "text.bubble") { model.openTranscript(recording) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Open transcript.md")
+            }
             Button(playback.isPlaying(recording) ? "Pause" : "Play",
                    systemImage: playback.isPlaying(recording) ? "pause.circle.fill" : "play.circle.fill") {
                 playback.toggle(recording)
@@ -543,6 +583,16 @@ struct RecordingActions: View {
         .disabled(!recording.canPlay)
         if model.playback.isCurrent(recording) {
             Button("Stop", systemImage: "stop") { model.playback.stop() }
+        }
+        if recording.hasTranscript {
+            Button("Open Transcript", systemImage: "text.bubble") { model.openTranscript(recording) }
+        }
+        if model.isTranscribing(recording) {
+            Button("Stop Transcription", systemImage: "xmark.circle") { model.stopTranscription(recording.folder) }
+        } else {
+            Button(recording.hasTranscript ? "Transcribe Again" : "Transcribe", systemImage: "waveform.badge.magnifyingglass") {
+                model.transcribe(recording)
+            }
         }
         Button("Show in Finder", systemImage: "folder") { model.reveal(recording) }
         Divider()

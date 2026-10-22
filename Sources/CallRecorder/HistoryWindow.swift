@@ -22,9 +22,11 @@ private struct HistoryView: View {
     @State private var query = ""
     @State private var selection: Recording.ID?
     @State private var showInspector = true
+    /// Transcript texts for search, loaded in the background once the window is open.
+    @State private var transcriptTexts: [Recording.ID: String] = [:]
 
     private var filtered: [Recording] {
-        model.recordings.filter { (filter ?? .all).includes($0) && $0.matches(query) }
+        model.recordings.filter { (filter ?? .all).includes($0) && $0.matches(query, transcript: transcriptTexts[$0.id]) }
     }
 
     private var selected: Recording? {
@@ -46,12 +48,20 @@ private struct HistoryView: View {
                 .overlay { emptyState }
                 .inspector(isPresented: $showInspector) {
                     RecordingInspector(recording: selected, model: model)
-                        .inspectorColumnWidth(min: 240, ideal: 280, max: 380)
+                        .inspectorColumnWidth(min: 260, ideal: 340, max: 480)
                 }
+        }
+        .task(id: model.recordings.filter(\.hasTranscript).map(\.id)) {
+            let folders = model.recordings.filter(\.hasTranscript).map(\.folder)
+            transcriptTexts = await Task.detached(priority: .utility) {
+                Dictionary(uniqueKeysWithValues: folders.compactMap { folder in
+                    Transcript.load(from: folder).map { (folder, $0.plainText) }
+                })
+            }.value
         }
         .navigationTitle((filter ?? .all).title)
         .navigationSubtitle(countText)
-        .searchable(text: $query, placement: .toolbar, prompt: "Search")
+        .searchable(text: $query, placement: .toolbar, prompt: "Search, including transcripts")
         .toolbar {
             ToolbarItemGroup {
                 Button("Show in Finder", systemImage: "folder") {
@@ -134,6 +144,12 @@ private struct RecordingsTable: View {
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                         .help(recording.problems.joined(separator: "\n"))
+                } else if model.isTranscribing(recording) {
+                    Label("Transcribing…", systemImage: "hourglass")
+                        .foregroundStyle(.secondary)
+                } else if recording.hasTranscript {
+                    Label("Transcribed", systemImage: "text.bubble")
+                        .foregroundStyle(.secondary)
                 } else {
                     Label("OK", systemImage: "checkmark.circle")
                         .foregroundStyle(.secondary)
@@ -196,6 +212,7 @@ private struct RecordingInspector: View {
                             .truncationMode(.middle)
                     }
                 }
+                TranscriptSection(recording: recording, model: model)
                 if recording.hasProblems {
                     Section("Issues") {
                         ForEach(recording.problems, id: \.self) { problem in
@@ -212,6 +229,53 @@ private struct RecordingInspector: View {
         } else {
             ContentUnavailableView("Select a recording", systemImage: "waveform",
                                    description: Text("Recording details appear here"))
+        }
+    }
+}
+
+/// The transcript of the selected recording: click a line to play from there.
+private struct TranscriptSection: View {
+    let recording: Recording
+    let model: AppModel
+    @State private var transcript: Transcript?
+
+    var body: some View {
+        Section("Transcript") {
+            if let transcript {
+                ForEach(Array(transcript.segments.enumerated()), id: \.offset) { _, segment in
+                    Button {
+                        model.playback.play(recording, at: segment.start / max(recording.duration, 1))
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(formatDuration(segment.start)).monospacedDigit().foregroundStyle(.secondary)
+                                Text(segment.speaker.title)
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(segment.speaker == .you ? Color.green : Color.blue)
+                            }
+                            .font(.caption)
+                            Text(segment.text).textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!recording.canPlay)
+                }
+                Button("Open transcript.md", systemImage: "doc.text") { model.openTranscript(recording) }
+            } else if model.isTranscribing(recording) {
+                let status = model.transcription?.folder == recording.folder ? model.transcription : nil
+                ProgressView(value: status?.progress ?? 0) {
+                    Text(status?.downloadingModel == true ? "Downloading the speech model…" : status == nil ? "Waiting to transcribe…" : "Transcribing…")
+                }
+                Button("Stop Transcription", systemImage: "xmark.circle") { model.stopTranscription(recording.folder) }
+            } else {
+                Button("Transcribe", systemImage: "waveform.badge.magnifyingglass") { model.transcribe(recording) }
+            }
+        }
+        .task(id: "\(recording.id.path)|\(recording.hasTranscript)") {
+            let folder = recording.folder
+            transcript = await Task.detached(priority: .userInitiated) { Transcript.load(from: folder) }.value
         }
     }
 }
