@@ -34,6 +34,12 @@ struct Transcript: Codable {
     }
 
     var plainText: String { segments.map(\.text).joined(separator: " ") }
+
+    /// One line per utterance — "[05:12–05:14] Them: text". Two trailing spaces are a Markdown line break,
+    /// so rendered views keep one line per utterance too instead of merging them into a paragraph.
+    var markdownLines: [String] {
+        segments.map { "[\(formatDuration($0.start))–\(formatDuration($0.end))] \($0.speaker.title): \($0.text)  " }
+    }
 }
 
 /// On-device transcription with Parakeet TDT 0.6B v3 via FluidAudio (Core ML, Neural Engine).
@@ -148,18 +154,14 @@ actor Transcriber {
         try markdown(transcript, folder: folder).write(to: Transcript.markdownURL(in: folder), atomically: true, encoding: .utf8)
     }
 
-    /// transcript.md: a header, then one line per utterance — "[05:12–05:14] Them: text" — with no blank
-    /// lines in between. Two trailing spaces are a Markdown line break, so rendered views keep one line per
-    /// utterance too instead of merging them into a paragraph.
+    /// transcript.md: a header, then one line per utterance with no blank lines in between.
     private static func markdown(_ transcript: Transcript, folder: URL) -> String {
         var header = ["Transcribed on device with \(transcript.model)", "You = your microphone, Them = the other side"]
         if let session = SessionHeader.load(from: folder) {
             header.insert("\(session.source) · \(RecordingDates.full(session.startedAt))", at: 0)
         }
         var lines = ["# Transcript", "", header.joined(separator: " · "), ""]
-        lines += transcript.segments.map {
-            "[\(formatDuration($0.start))–\(formatDuration($0.end))] \($0.speaker.title): \($0.text)  "
-        }
+        lines += transcript.markdownLines
         return lines.joined(separator: "\n") + "\n"
     }
 

@@ -13,6 +13,7 @@
 | `Playback.swift`, `ConversationTimeline.swift`, `Waveform.swift` | player and conversation waveform |
 | `Mixdown.swift`, `History.swift` | mixing to m4a, loading history from `~/Calls` |
 | `Transcriber.swift` | on-device transcription (FluidAudio + Parakeet Ultra), utterance splitting, transcript.md/json |
+| `Filing.swift`, `FilingWindow.swift` | knowledge base destinations, the filed call file, the agent command, notifications, the File Call window |
 
 ## Scripts
 
@@ -37,6 +38,7 @@ Transcription without the UI (the binary is `build/CallRecorder.app/Contents/Mac
 | `--enqueue-transcription <folder> [--stop-after N]` | the same path as after a call (queue, progress, unload); optionally stop after N s |
 | `--transcribe-clips <folder of .wav> <out.json>` | transcribe ready-made clips as they are, for benchmarking |
 | `--model v3\|ultra`, `--encoder int8\|int8-v2` | pick the Parakeet build for the commands above |
+| `--file-call <recording folder> <knowledge base> <destination id>` | file a transcribed recording (e.g. `03_projects/demo`), run the agent if it's on, wait for it and quit; the audio stays |
 
 UI screenshots without a call — the app saves PNGs of its own windows. Glass and vibrancy colours don't
 come through this way; these are layout snapshots:
@@ -46,7 +48,8 @@ open ~/Applications/CallRecorder.app --args --preview recording --preview-out /t
 ```
 
 States: `idle`, `call`, `recording`, `recording-ending`, `finishing`, `saved`, `problems`, `denied`,
-`playing`, `transcribing`, `empty`, `history`, `history-playing`, `history-empty`, `transcript` (made-up lines), `settings`.
+`playing`, `transcribing`, `empty`, `history`, `history-playing`, `history-empty`, `transcript` (made-up lines), `settings`,
+`filing` (the File Call window), `waiting` (the panel with a call waiting for a project).
 
 ## Capture pipeline
 

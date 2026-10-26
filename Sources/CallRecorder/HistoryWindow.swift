@@ -203,6 +203,14 @@ private struct RecordingInspector: View {
                     LabeledContent("Started", value: RecordingDates.full(recording.startedAt))
                     LabeledContent("Source", value: recording.source)
                     LabeledContent("Duration", value: recording.durationText)
+                    if let filing = recording.filing {
+                        LabeledContent("Filed to") {
+                            Button(filing.destination) { model.revealFiled(recording) }
+                                .buttonStyle(.link)
+                                .lineLimit(1)
+                                .truncationMode(.head)
+                        }
+                    }
                     LabeledContent("Folder") {
                         Button(recording.folder.lastPathComponent) { model.reveal(recording) }
                             .buttonStyle(.link)
@@ -270,7 +278,7 @@ private struct TranscriptSection: View {
                     Text(status?.downloadingModel == true ? "Downloading the speech model…" : status == nil ? "Waiting to transcribe…" : "Transcribing…")
                 }
                 Button("Stop Transcription", systemImage: "xmark.circle") { model.stopTranscription(recording.folder) }
-            } else {
+            } else if recording.hasAudio {
                 Button("Transcribe", systemImage: "waveform.badge.magnifyingglass") { model.transcribe(recording) }
             }
         }

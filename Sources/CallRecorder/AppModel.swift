@@ -60,11 +60,31 @@ final class AppModel {
     private(set) var recordings: [Recording] = []
     /// The transcription in progress, if any — shown in the panel and next to the recording.
     private(set) var transcription: TranscriptionStatus?
+    /// Transcribed recordings waiting for the user to pick a project; the first one is shown in the
+    /// "File Call" window.
+    private(set) var filingQueue: [URL] = []
+    /// Recordings whose filed transcript the agent is working on right now.
+    private(set) var agentRuns: Set<URL> = []
     let playback = Playback()
 
     /// Empty string means the system default microphone.
     var selectedMicUID = UserDefaults.standard.string(forKey: "micUID") ?? "" {
         didSet { UserDefaults.standard.set(selectedMicUID, forKey: "micUID") }
+    }
+
+    /// The knowledge base transcripts are filed to (~/Work); empty turns filing off.
+    var knowledgeBasePath = UserDefaults.standard.string(forKey: "knowledgeBase") ?? AppModel.defaultKnowledgeBase {
+        didSet { UserDefaults.standard.set(knowledgeBasePath, forKey: "knowledgeBase") }
+    }
+    /// The audio is only needed until the transcript is in the knowledge base.
+    var trashAudioAfterFiling = UserDefaults.standard.object(forKey: "trashAudioAfterFiling") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(trashAudioAfterFiling, forKey: "trashAudioAfterFiling") }
+    }
+    var runAgentAfterFiling = UserDefaults.standard.object(forKey: "runAgentAfterFiling") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(runAgentAfterFiling, forKey: "runAgentAfterFiling") }
+    }
+    var agent = AgentKind(rawValue: UserDefaults.standard.string(forKey: "agent") ?? "") ?? .claude {
+        didSet { UserDefaults.standard.set(agent.rawValue, forKey: "agent") }
     }
 
     @ObservationIgnored private let diagnostics: DiagnosticLog
@@ -86,6 +106,14 @@ final class AppModel {
     /// Recording is available only when a call is visible: the source is always detected automatically.
     var canRecord: Bool { phase == .idle && activeCall != nil && !permissionsDenied }
     var recentRecordings: [Recording] { Array(recordings.prefix(5)) }
+    var knowledgeBase: URL? {
+        knowledgeBasePath.isEmpty ? nil : URL(filePath: knowledgeBasePath, directoryHint: .isDirectory)
+    }
+
+    private static var defaultKnowledgeBase: String {
+        let work = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Work", directoryHint: .isDirectory)
+        return FileManager.default.fileExists(atPath: work.path) ? work.path : ""
+    }
 
     init() {
         diagnostics = DiagnosticLog(url: Self.recordingsFolder.appending(path: "_diagnostics/audio-processes.log"))
@@ -222,6 +250,9 @@ final class AppModel {
                     do {
                         let transcript = try await job.value
                         diagnostics.write("transcript: \(transcript.segments.count) segments in \(Int(transcript.processingSeconds)) s → \(folder.lastPathComponent)")
+                        if knowledgeBase != nil, FilingRecord.load(from: folder) == nil, !transcript.segments.isEmpty {
+                            askToFile(folder)
+                        }
                         break
                     } catch is CancellationError where job.isCancelled {
                         diagnostics.write("transcription stopped: \(folder.lastPathComponent)")
@@ -253,6 +284,113 @@ final class AppModel {
         case .transcribing(let value):
             transcription?.downloadingModel = false
             transcription?.progress = value
+        }
+    }
+
+    // MARK: - Filing
+
+    /// Projects, clients and the inbox of the knowledge base, read from disk.
+    func filingDestinations() -> [FilingDestination] {
+        knowledgeBase.map(KnowledgeBase.destinations(in:)) ?? []
+    }
+
+    var lastFilingDestination: String? { UserDefaults.standard.string(forKey: "lastFilingDestination") }
+
+    /// "Send to Project…" for a recording that is already transcribed — puts it first in the queue.
+    func requestFiling(_ recording: Recording) {
+        filingQueue.removeAll { $0 == recording.folder }
+        filingQueue.insert(recording.folder, at: 0)
+    }
+
+    /// The user closed the question with "Later": the recording stays unfiled, and "Send to Project…"
+    /// in its menu brings the question back.
+    func postponeFiling(_ folder: URL) {
+        filingQueue.removeAll { $0 == folder }
+    }
+
+    func file(_ folder: URL, to destination: FilingDestination, topic: String) {
+        let url: URL
+        do {
+            url = try KnowledgeBase.file(recording: folder, to: destination, topic: topic)
+        } catch {
+            status = StatusMessage(kind: .error, title: "Couldn't file the transcript", details: [error.localizedDescription])
+            diagnostics.write("✗ filing failed: \(folder.lastPathComponent): \(error.localizedDescription)")
+            return
+        }
+        filingQueue.removeAll { $0 == folder }
+        UserDefaults.standard.set(destination.id, forKey: "lastFilingDestination")
+        diagnostics.write("filed: \(folder.lastPathComponent) → \(url.path)")
+        var details: [String] = []
+        // Only after the transcript is safely written: the audio goes to the Trash, not away for good.
+        if trashAudioAfterFiling {
+            if let current = recordings.first(where: { $0.folder == folder }), playback.isCurrent(current) { playback.stop() }
+            let failed = KnowledgeBase.trashAudio(in: folder)
+            if !failed.isEmpty { details.append("Couldn't move to Trash: \(failed.joined(separator: ", "))") }
+        }
+        status = StatusMessage(kind: details.isEmpty ? .success : .warning, title: "Filed to \(destination.title)", details: details)
+        reloadHistory()
+        if runAgentAfterFiling, destination.kind != .inbox {
+            runAgent(on: url, in: destination, root: knowledgeBase, recording: folder)
+        }
+    }
+
+    func revealFiled(_ recording: Recording) {
+        guard let path = recording.filing?.file else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: path)])
+    }
+
+    private func askToFile(_ folder: URL) {
+        guard !filingQueue.contains(folder) else { return }
+        filingQueue.append(folder)
+        Notifier.post(title: "Transcript ready", body: "Pick the project this call belongs to.")
+    }
+
+    /// Runs /call headless on the filed transcript: inside the destination folder, plus inbox/ for notes
+    /// about Sergei that the skill must not write into his own files.
+    private func runAgent(on file: URL, in destination: FilingDestination, root: URL?, recording folder: URL) {
+        guard let root else { return }
+        let log = folder.appending(path: "agent.log")
+        do {
+            FileManager.default.createFile(atPath: log.path, contents: nil)
+            let output = try FileHandle(forWritingTo: log)
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/zsh")
+            process.arguments = ["-lc", agent.command]
+            process.currentDirectoryURL = destination.folder
+            var environment = ProcessInfo.processInfo.environment
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            environment["PATH"] = "\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin")
+            environment["CALL_FILE"] = file.path
+            environment["KB_INBOX"] = root.appending(path: KnowledgeBase.inboxPath).path
+            process.environment = environment
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = output
+            process.standardError = output
+            process.terminationHandler = { [weak self] process in
+                try? output.close()
+                let code = process.terminationStatus
+                Task { @MainActor in self?.agentFinished(folder, log: log, code: code, title: destination.title) }
+            }
+            try process.run()
+            agentRuns.insert(folder)
+            diagnostics.write("agent (\(agent.rawValue)) started: \(file.lastPathComponent) in \(destination.folder.path)")
+        } catch {
+            status = StatusMessage(kind: .error, title: "Couldn't start the agent", details: [error.localizedDescription])
+            diagnostics.write("✗ agent failed to start: \(error.localizedDescription)")
+        }
+    }
+
+    private func agentFinished(_ folder: URL, log: URL, code: Int32, title: String) {
+        agentRuns.remove(folder)
+        let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        let summary = text.split(separator: "\n").suffix(3).map(String.init)
+        diagnostics.write("agent finished with \(code): \(folder.lastPathComponent)")
+        if code == 0 {
+            status = StatusMessage(kind: .success, title: "Agent processed the call · \(title)", details: summary)
+            Notifier.post(title: "Call processed · \(title)", body: summary.joined(separator: "\n"))
+        } else {
+            status = StatusMessage(kind: .error, title: "The agent failed (exit \(code))", details: summary + ["Log: \(log.path)"])
+            Notifier.post(title: "The agent failed · \(title)", body: summary.last ?? "See agent.log in the recording folder.")
         }
     }
 
@@ -441,6 +579,9 @@ final class AppModel {
             recordings[1].hasTranscript = true
             recordings[2].hasTranscript = true
             transcription = TranscriptionStatus(folder: recordings[0].folder, progress: 0.42)
+        case "filing", "waiting":
+            recordings[0].hasTranscript = true
+            filingQueue = [recordings[0].folder]
         case "call":
             activeCall = .faceTime
         case "recording", "recording-ending":
@@ -479,6 +620,10 @@ final class AppModel {
     /// `--transcribe <recording folder>` and `--transcribe-clips <folder of .wav> <out.json>`.
     private func runTranscriptionCommandIfRequested() {
         let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--file-call"), arguments.indices.contains(index + 3) {
+            runFileCallCommand(recording: arguments[index + 1], knowledgeBase: arguments[index + 2], destination: arguments[index + 3])
+            return
+        }
         if let index = arguments.firstIndex(of: "--model"), arguments.indices.contains(index + 1) {
             Transcriber.modelVersion = arguments[index + 1] == "ultra" ? .ultra : .v3
         }
@@ -531,6 +676,31 @@ final class AppModel {
                 }
                 NSApp.terminate(nil)
             }
+        }
+    }
+
+    /// `--file-call <recording folder> <knowledge base> <destination id>`: files the transcript into that
+    /// knowledge base, runs the agent if it's turned on and waits for it, then quits. The audio stays.
+    private func runFileCallCommand(recording: String, knowledgeBase path: String, destination id: String) {
+        let folder = URL(filePath: recording, directoryHint: .isDirectory)
+        let root = URL(filePath: path, directoryHint: .isDirectory)
+        Task {
+            if let destination = KnowledgeBase.destinations(in: root).first(where: { $0.id == id }) {
+                do {
+                    let url = try KnowledgeBase.file(recording: folder, to: destination, topic: "")
+                    diagnostics.write("file-call: → \(url.path)")
+                    if runAgentAfterFiling, destination.kind != .inbox {
+                        runAgent(on: url, in: destination, root: root, recording: folder)
+                        while !agentRuns.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                    }
+                    diagnostics.write("file-call: done; last status: \(status?.title ?? "none")")
+                } catch {
+                    diagnostics.write("file-call failed: \(error.localizedDescription)")
+                }
+            } else {
+                diagnostics.write("file-call: no destination \(id) in \(root.path)")
+            }
+            NSApp.terminate(nil)
         }
     }
 

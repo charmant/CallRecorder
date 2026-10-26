@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-/// A saved call recording — a folder in ~/Calls with session.json.
+/// A saved call recording — a folder in the recordings folder (~/Calls by default) with session.json.
 struct Recording: Identifiable, Hashable {
     let folder: URL
     let source: String
@@ -10,6 +10,10 @@ struct Recording: Identifiable, Hashable {
     let problems: [String]
     let canPlay: Bool
     var hasTranscript = false
+    /// The source tracks are still there, so the recording can be transcribed (again).
+    var hasAudio = true
+    /// Where the transcript was filed in the knowledge base, if it was.
+    var filing: FilingRecord?
 
     var id: URL { folder }
     var conversationURL: URL { folder.appending(path: "conversation.m4a") }
@@ -58,7 +62,9 @@ enum RecordingHistory {
             let canPlay = FileManager.default.fileExists(atPath: folder.appending(path: "conversation.m4a").path)
             return Recording(folder: folder, source: session.source, startedAt: session.startedAt,
                              duration: duration, problems: problems, canPlay: canPlay,
-                             hasTranscript: FileManager.default.fileExists(atPath: Transcript.url(in: folder).path))
+                             hasTranscript: FileManager.default.fileExists(atPath: Transcript.url(in: folder).path),
+                             hasAudio: FileManager.default.fileExists(atPath: folder.appending(path: "remote.caf").path),
+                             filing: FilingRecord.load(from: folder))
         }
         .sorted { $0.startedAt > $1.startedAt }
     }

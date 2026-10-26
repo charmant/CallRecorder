@@ -28,6 +28,9 @@ tracks are separate, the transcript knows exactly who said what.
 - Transcripts open in the app's own window: the conversation waveform on top, every line with its time and
   speaker, click a time to play from there, the current line follows playback, search and copy.
 - In the History window, click a transcript line to play from that moment; search covers transcripts.
+- Filing to a knowledge base: once a call is transcribed, the app asks which project it belongs to and writes the
+  transcript to that project's `calls/` folder (projects, clients and an inbox are read from the folder itself),
+  moves the audio to the Trash and runs an agent (Claude Code or Codex) on it headless. Old calls: **Send to Project…**.
 - Liquid Glass UI built from native macOS 26 components.
 - Everything stays local: no servers, no analytics.
 
@@ -94,6 +97,25 @@ Each recording is a folder `~/Calls/<date time> <FaceTime|Telegram>/`:
 | `transcript.json` | the same with exact times, for search and future summaries |
 | `waveform.json` | waveform for the player |
 | `events.log` | what happened during the recording |
+| `filed.json` | where the transcript was filed, if it was |
+| `agent.log` | the agent's output for the filed call |
+
+### Filing to a knowledge base
+
+Settings → **Knowledge Base** points at a folder laid out like `~/Work` (the default when it exists):
+
+```text
+~/Work/03_projects/<project>/calls/                  a project
+~/Work/03_projects/<project>/clients/<client>/calls/ a project's client
+~/Work/03_projects/<project>/company/calls/          the company itself (projects with clients/)
+~/Work/inbox/calls/                                  belongs nowhere yet
+```
+
+The filed file is `<YYYY-MM-DD HH-mm> <topic>.md`: front matter (date, source, duration, project, topic), an empty
+`## Итоги` section and the transcript under `## Расшифровка` (the knowledge base is in Russian). After that the
+audio goes to the Trash (a setting) and the agent runs the knowledge base's `/call` skill in the project folder:
+it may write only there and to `inbox/`, fills in `## Итоги`, updates the project's notes and commits. Its summary
+comes as a notification. The recording folder in `~/Calls` keeps `session.json` and the transcript.
 
 ## How it works
 

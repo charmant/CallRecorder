@@ -75,7 +75,7 @@ private struct TranscriptView: View {
                 } description: {
                     Text(model.transcription?.folder == folder ? "Transcribing…" : "This recording hasn't been transcribed.")
                 } actions: {
-                    if let recording, !model.isTranscribing(recording) {
+                    if let recording, recording.hasAudio, !model.isTranscribing(recording) {
                         Button("Transcribe") { model.transcribe(recording) }
                             .buttonStyle(.glassProminent)
                     }

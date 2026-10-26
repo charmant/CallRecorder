@@ -1,6 +1,7 @@
+import AppKit
 import SwiftUI
 
-/// Settings (⌘,): the microphone, permissions, recordings folder and diagnostics — everything the
+/// Settings (⌘,): the microphone, permissions, recordings folder, knowledge base and diagnostics — everything the
 /// panel doesn't need day to day.
 struct SettingsScene: Scene {
     let model: AppModel
@@ -50,6 +51,32 @@ private struct SettingsView: View {
             }
 
             Section {
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(model.knowledgeBasePath.isEmpty ? "Off" : (model.knowledgeBasePath as NSString).abbreviatingWithTildeInPath)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Choose…") { chooseKnowledgeBase() }
+                        if !model.knowledgeBasePath.isEmpty {
+                            Button("Turn Off") { model.knowledgeBasePath = "" }
+                        }
+                    }
+                }
+                Toggle("Move audio to the Trash once the transcript is filed", isOn: $model.trashAudioAfterFiling)
+                Toggle("Process the filed call with an agent (/call)", isOn: $model.runAgentAfterFiling)
+                Picker("Agent", selection: $model.agent) {
+                    ForEach(AgentKind.allCases) { Text($0.title).tag($0) }
+                }
+                .disabled(!model.runAgentAfterFiling)
+            } header: {
+                Text("Knowledge Base")
+            } footer: {
+                Text("After each transcript the app asks which project the call belongs to and writes it to the project's calls/ folder. The agent runs headless in that folder and may only write there and to inbox/.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 if model.activeProcesses.isEmpty {
                     Text("No app is playing or recording audio right now.")
                         .foregroundStyle(.secondary)
@@ -80,13 +107,25 @@ private struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
-        .frame(minHeight: 560)
+        .frame(minHeight: 680)
         .onAppear {
             model.refreshMicrophones()
             model.refreshPermissions()
             WindowActivation.opened()
         }
         .onDisappear { WindowActivation.closed() }
+    }
+}
+
+extension SettingsView {
+    private func chooseKnowledgeBase() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Choose"
+        panel.message = "The folder with 03_projects/ — the knowledge base calls are filed to"
+        if !model.knowledgeBasePath.isEmpty { panel.directoryURL = URL(filePath: model.knowledgeBasePath) }
+        if panel.runModal() == .OK, let url = panel.url { model.knowledgeBasePath = url.path }
     }
 }
 

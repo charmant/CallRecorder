@@ -31,6 +31,11 @@ struct MenuBarLabel: View {
                 openWindow(id: TranscriptWindow.id, value: first.folder)
             }
             if PreviewHarness.opensSettings { openSettings() }
+            if PreviewHarness.opensFiling { openWindow(id: FilingWindow.id) }
+        }
+        // A transcript is ready: ask where it goes. The label lives as long as the app, so it can open windows.
+        .onChange(of: model.filingQueue.first) { _, folder in
+            if folder != nil { openWindow(id: FilingWindow.id) }
         }
     }
 }
@@ -50,6 +55,15 @@ struct MenuView: View {
                 if let status = model.status { StatusCard(status: status) }
                 if let transcription = model.transcription {
                     TranscriptionRow(status: transcription) { model.stopTranscription(transcription.folder) }
+                }
+                if !model.filingQueue.isEmpty {
+                    FilingCallout(count: model.filingQueue.count) {
+                        openWindow(id: FilingWindow.id)
+                        NSApp.activate()
+                    }
+                }
+                if !model.agentRuns.isEmpty {
+                    AgentRow(count: model.agentRuns.count, agent: model.agent)
                 }
                 if model.permissionsDenied { PermissionCallout(model: model) }
                 RecentSection(model: model)
@@ -388,6 +402,46 @@ private struct TranscriptionRow: View {
     }
 }
 
+/// Transcribed calls that haven't been filed to a project yet.
+private struct FilingCallout: View {
+    let count: Int
+    let open: () -> Void
+
+    var body: some View {
+        GroupBox {
+            HStack {
+                Label(count == 1 ? "A call is waiting for a project" : "\(count) calls are waiting for a project",
+                      systemImage: "tray.and.arrow.down")
+                    .lineLimit(1)
+                Spacer()
+                Button("File…", action: open)
+                    .buttonStyle(.glassProminent)
+            }
+            .font(.callout)
+            .padding(4)
+        }
+    }
+}
+
+/// The agent is processing a filed call in the background.
+private struct AgentRow: View {
+    let count: Int
+    let agent: AgentKind
+
+    var body: some View {
+        GroupBox {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(count == 1 ? "\(agent.title) is processing the call…" : "\(agent.title) is processing \(count) calls…")
+                    .lineLimit(1)
+                Spacer()
+            }
+            .font(.callout)
+            .padding(4)
+        }
+    }
+}
+
 private struct RecentSection: View {
     let model: AppModel
 
@@ -571,9 +625,19 @@ struct RecordingActions: View {
         }
         if model.isTranscribing(recording) {
             Button("Stop Transcription", systemImage: "xmark.circle") { model.stopTranscription(recording.folder) }
-        } else {
+        } else if recording.hasAudio {
             Button(recording.hasTranscript ? "Transcribe Again" : "Transcribe", systemImage: "waveform.badge.magnifyingglass") {
                 model.transcribe(recording)
+            }
+        }
+        if recording.hasTranscript, model.knowledgeBase != nil {
+            if recording.filing != nil {
+                Button("Show Filed Transcript", systemImage: "doc.text.magnifyingglass") { model.revealFiled(recording) }
+            }
+            Button(recording.filing == nil ? "Send to Project…" : "Send to Another Project…", systemImage: "tray.and.arrow.down") {
+                model.requestFiling(recording)
+                openWindow(id: FilingWindow.id)
+                NSApp.activate()
             }
         }
         Button("Show in Finder", systemImage: "folder") { model.reveal(recording) }
